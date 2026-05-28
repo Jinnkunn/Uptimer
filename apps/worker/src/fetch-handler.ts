@@ -1,4 +1,5 @@
 import type { Env } from './env';
+import { hasValidAdminHttpRequest } from './middleware/auth';
 import { AppError } from './middleware/errors';
 import type { Trace } from './observability/trace';
 
@@ -47,7 +48,9 @@ function stripAsciiControlChars(value: string): string {
 }
 
 function canonicalizeApiPathname(pathname: string): string {
-  const normalizedPathname = normalizeApiPathname(stripAsciiControlChars(decodeApiPathname(pathname)));
+  const normalizedPathname = normalizeApiPathname(
+    stripAsciiControlChars(decodeApiPathname(pathname)),
+  );
   try {
     return normalizeApiPathname(new URL(normalizedPathname, 'https://uptimer.invalid').pathname);
   } catch {
@@ -151,12 +154,6 @@ function methodNotAllowed(allowedMethods: string): Response {
   return res;
 }
 
-function readBearerToken(authHeader: string | null): string | null {
-  if (!authHeader) return null;
-  const match = authHeader.match(/^Bearer\s+(.+)$/i);
-  return match?.[1] ?? null;
-}
-
 function hasAuthorizationHeaderValue(req: Request): boolean {
   const value = req.headers.get('Authorization');
   return typeof value === 'string' && value.trim().length > 0;
@@ -165,12 +162,6 @@ function hasAuthorizationHeaderValue(req: Request): boolean {
 function hasTraceTokenHeaderValue(req: Request): boolean {
   const value = req.headers.get(TRACE_TOKEN_HEADER);
   return typeof value === 'string' && value.trim().length > 0;
-}
-
-function hasValidAdminToken(req: Request, env: Pick<Env, 'ADMIN_TOKEN'>): boolean {
-  const expected = env.ADMIN_TOKEN;
-  if (!expected) return false;
-  return readBearerToken(req.headers.get('authorization')) === expected;
 }
 
 function appendAuthorizationVary(res: Response): Response {
@@ -203,16 +194,20 @@ function rewritePublicRequest(req: Request): Request {
 
 function isVersionedPublicApiPath(pathname: string): boolean {
   const normalizedPathname = canonicalHotPublicPathname(pathname);
-  return normalizedPathname === '/api/v1/public' || normalizedPathname.startsWith('/api/v1/public/');
+  return (
+    normalizedPathname === '/api/v1/public' || normalizedPathname.startsWith('/api/v1/public/')
+  );
 }
 
-function shouldBypassPublicSharedCaching(req: Request, env: Pick<Env, 'ADMIN_TOKEN'>): boolean {
-  return hasTraceTokenHeaderValue(req) || (hasAuthorizationHeaderValue(req) && !hasValidAdminToken(req, env));
+function shouldBypassPublicSharedCaching(req: Request): boolean {
+  return hasTraceTokenHeaderValue(req) || hasAuthorizationHeaderValue(req);
 }
 
 function isGetOnlyPublicApiPath(pathname: string): boolean {
   const normalizedPathname = canonicalHotPublicPathname(pathname);
-  return normalizedPathname === '/api/v1/public' || normalizedPathname.startsWith('/api/v1/public/');
+  return (
+    normalizedPathname === '/api/v1/public' || normalizedPathname.startsWith('/api/v1/public/')
+  );
 }
 
 function isPublicUiPath(url: URL): boolean {
@@ -224,7 +219,9 @@ function isPublicUiPath(url: URL): boolean {
   if (/^\/api\/v1\/public\/monitors\/\d+\/day-context$/.test(pathname)) return true;
   if (/^\/api\/v1\/public\/monitors\/\d+\/outages$/.test(pathname)) return true;
   if (/^\/api\/v1\/public\/monitors\/\d+\/uptime$/.test(pathname)) return true;
-  return /^\/api\/v1\/public\/monitors\/\d+\/latency$/.test(pathname) && url.searchParams.has('format');
+  return (
+    /^\/api\/v1\/public\/monitors\/\d+\/latency$/.test(pathname) && url.searchParams.has('format')
+  );
 }
 
 function canonicalHotPublicPathname(pathname: string): string {
@@ -316,7 +313,10 @@ function toHotPublicStaleResponse(res: Response): Response | null {
 
   const out = new Response(res.body, res);
   out.headers.delete(HOT_PUBLIC_CACHED_AT_HEADER);
-  out.headers.set('Cache-Control', 'public, max-age=0, stale-while-revalidate=30, stale-if-error=30');
+  out.headers.set(
+    'Cache-Control',
+    'public, max-age=0, stale-while-revalidate=30, stale-if-error=30',
+  );
   return out;
 }
 
@@ -367,7 +367,10 @@ function putHotPublicCache(
   freshResponse.headers.set('Cache-Control', `public, max-age=${HOT_PUBLIC_STALE_MAX_AGE_SECONDS}`);
   const staleResponse = new Response(res.clone().body, res);
   staleResponse.headers.set(HOT_PUBLIC_CACHED_AT_HEADER, String(Math.floor(Date.now() / 1000)));
-  staleResponse.headers.set('Cache-Control', `public, max-age=${HOT_PUBLIC_STALE_STORAGE_TTL_SECONDS}`);
+  staleResponse.headers.set(
+    'Cache-Control',
+    `public, max-age=${HOT_PUBLIC_STALE_STORAGE_TTL_SECONDS}`,
+  );
 
   ctx.waitUntil(
     cachePromise
@@ -421,9 +424,8 @@ async function handlePublicHomepageArtifact(req: Request, env: Env): Promise<Res
   }
 
   const snapshot = trace
-    ? await trace.timeAsync(
-        'homepage_artifact_read',
-        () => readHomepageSnapshotArtifactJson(env.DB, now),
+    ? await trace.timeAsync('homepage_artifact_read', () =>
+        readHomepageSnapshotArtifactJson(env.DB, now),
       )
     : await readHomepageSnapshotArtifactJson(env.DB, now);
   if (snapshot) {
@@ -443,9 +445,8 @@ async function handlePublicHomepageArtifact(req: Request, env: Env): Promise<Res
   }
 
   const stale = trace
-    ? await trace.timeAsync(
-        'homepage_artifact_stale_read',
-        () => readStaleHomepageSnapshotArtifactJson(env.DB, now),
+    ? await trace.timeAsync('homepage_artifact_stale_read', () =>
+        readStaleHomepageSnapshotArtifactJson(env.DB, now),
       )
     : await readStaleHomepageSnapshotArtifactJson(env.DB, now);
   if (stale) {
@@ -467,12 +468,13 @@ async function handlePublicHomepageArtifact(req: Request, env: Env): Promise<Res
   throw new AppError(503, 'UNAVAILABLE', 'Homepage artifact unavailable');
 }
 
-async function handlePublicHomepage(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-  const {
-    applyHomepageCacheHeaders,
-    readHomepageSnapshotJson,
-    readHomepageSnapshotJsonAnyAge,
-  } = await import('./snapshots/public-homepage-read');
+async function handlePublicHomepage(
+  req: Request,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
+  const { applyHomepageCacheHeaders, readHomepageSnapshotJson, readHomepageSnapshotJsonAnyAge } =
+    await import('./snapshots/public-homepage-read');
   const now = Math.floor(Date.now() / 1000);
   const trace = await resolveTrace(req, env);
   if (trace) {
@@ -480,10 +482,7 @@ async function handlePublicHomepage(req: Request, env: Env, ctx: ExecutionContex
   }
 
   const snapshot = trace
-    ? await trace.timeAsync(
-        'homepage_snapshot_read',
-        () => readHomepageSnapshotJson(env.DB, now),
-      )
+    ? await trace.timeAsync('homepage_snapshot_read', () => readHomepageSnapshotJson(env.DB, now))
     : await readHomepageSnapshotJson(env.DB, now);
   if (snapshot) {
     const res = new Response(snapshot.bodyJson, {
@@ -501,9 +500,8 @@ async function handlePublicHomepage(req: Request, env: Env, ctx: ExecutionContex
   }
 
   const stale = trace
-    ? await trace.timeAsync(
-        'homepage_snapshot_stale_read',
-        () => readHomepageSnapshotJsonAnyAge(env.DB, now, PUBLIC_STATIC_STALE_MAX_SECONDS),
+    ? await trace.timeAsync('homepage_snapshot_stale_read', () =>
+        readHomepageSnapshotJsonAnyAge(env.DB, now, PUBLIC_STATIC_STALE_MAX_SECONDS),
       )
     : await readHomepageSnapshotJsonAnyAge(env.DB, now, PUBLIC_STATIC_STALE_MAX_SECONDS);
   if (stale) {
@@ -525,11 +523,15 @@ async function handlePublicHomepage(req: Request, env: Env, ctx: ExecutionContex
   return publicRoutes.fetch(rewritePublicRequest(req), env, ctx);
 }
 
-async function handlePublicStatus(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+async function handlePublicStatus(
+  req: Request,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
   const { applyStatusCacheHeaders, readStaleStatusSnapshotJson } =
     await import('./snapshots/public-status-read');
   const now = Math.floor(Date.now() / 1000);
-  const includeHiddenMonitors = hasValidAdminToken(req, env);
+  const includeHiddenMonitors = await hasValidAdminHttpRequest(req, env);
   const hasAuthorizationHeader = hasAuthorizationHeaderValue(req);
   const hasTraceTokenHeader = hasTraceTokenHeaderValue(req);
   const shouldBypassSharedCaching =
@@ -545,9 +547,8 @@ async function handlePublicStatus(req: Request, env: Env, ctx: ExecutionContext)
   if (includeHiddenMonitors) {
     const { computePublicStatusPayload } = await import('./public/status');
     const payload = trace
-      ? await trace.timeAsync(
-          'status_compute',
-          () => computePublicStatusPayload(env.DB, now, { includeHiddenMonitors: true }),
+      ? await trace.timeAsync('status_compute', () =>
+          computePublicStatusPayload(env.DB, now, { includeHiddenMonitors: true }),
         )
       : await computePublicStatusPayload(env.DB, now, { includeHiddenMonitors: true });
 
@@ -566,9 +567,8 @@ async function handlePublicStatus(req: Request, env: Env, ctx: ExecutionContext)
   }
 
   const snapshot = trace
-    ? await trace.timeAsync(
-        'status_snapshot_read',
-        () => readStaleStatusSnapshotJson(env.DB, now, PUBLIC_STATIC_STALE_MAX_SECONDS),
+    ? await trace.timeAsync('status_snapshot_read', () =>
+        readStaleStatusSnapshotJson(env.DB, now, PUBLIC_STATIC_STALE_MAX_SECONDS),
       )
     : await readStaleStatusSnapshotJson(env.DB, now, PUBLIC_STATIC_STALE_MAX_SECONDS);
   if (snapshot) {
@@ -591,10 +591,7 @@ async function handlePublicStatus(req: Request, env: Env, ctx: ExecutionContext)
     }
     if (trace) {
       const snapshotPath = snapshot.age > 60 ? 'stale_snapshot' : 'snapshot';
-      trace.setLabel(
-        'path',
-        shouldBypassSharedCaching ? `${snapshotPath}_private` : snapshotPath,
-      );
+      trace.setLabel('path', shouldBypassSharedCaching ? `${snapshotPath}_private` : snapshotPath);
       trace.setLabel('age', snapshot.age);
       trace.finish('total');
       await applyTrace(res, trace, 'w');
@@ -608,10 +605,7 @@ async function handlePublicStatus(req: Request, env: Env, ctx: ExecutionContext)
       import('./snapshots/public-status'),
     ]);
     const payload = trace
-      ? await trace.timeAsync(
-          'status_compute',
-          () => computePublicStatusPayload(env.DB, now),
-        )
+      ? await trace.timeAsync('status_compute', () => computePublicStatusPayload(env.DB, now))
       : await computePublicStatusPayload(env.DB, now);
 
     const res = shouldBypassSharedCaching
@@ -648,20 +642,19 @@ async function handlePublicStatus(req: Request, env: Env, ctx: ExecutionContext)
     console.warn('public status: compute failed', err);
 
     const stale = trace
-      ? await trace.timeAsync(
-          'status_snapshot_stale_read',
-          () => readStaleStatusSnapshotJson(env.DB, now, 10 * 60),
+      ? await trace.timeAsync('status_snapshot_stale_read', () =>
+          readStaleStatusSnapshotJson(env.DB, now, 10 * 60),
         )
       : await readStaleStatusSnapshotJson(env.DB, now, 10 * 60);
     if (stale) {
       const res = shouldBypassSharedCaching
-      ? applyPrivateNoStore(
-          new Response(stale.bodyJson, {
-            status: 200,
-            headers: { 'Content-Type': 'application/json; charset=utf-8' },
-          }),
-          req,
-        )
+        ? applyPrivateNoStore(
+            new Response(stale.bodyJson, {
+              status: 200,
+              headers: { 'Content-Type': 'application/json; charset=utf-8' },
+            }),
+            req,
+          )
         : appendAuthorizationVary(
             new Response(stale.bodyJson, {
               status: 200,
@@ -684,7 +677,11 @@ async function handlePublicStatus(req: Request, env: Env, ctx: ExecutionContext)
   }
 }
 
-export async function handleFetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+export async function handleFetch(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
   const originalUrl = new URL(request.url);
   const normalizedRequest = normalizeApiRequestPath(request);
   const url = new URL(normalizedRequest.url);
@@ -694,7 +691,7 @@ export async function handleFetch(request: Request, env: Env, ctx: ExecutionCont
   const fastMethodPathname = resolvedApiPath?.versionedPathname ?? url.pathname;
   const fastGetOnlyPath = isGetOnlyPublicApiPath(fastMethodPathname);
   const corsAllowedMethods = allowedMethodsForApiPath(fastMethodPathname);
-  const bypassPublicSharedCache = shouldBypassPublicSharedCaching(normalizedRequest, env);
+  const bypassPublicSharedCache = shouldBypassPublicSharedCaching(normalizedRequest);
   const shouldPrivatizePublicError =
     bypassPublicSharedCache && isVersionedPublicApiPath(fastMethodPathname);
   const canUseHotPublicCache =
@@ -774,15 +771,19 @@ export async function handleFetch(request: Request, env: Env, ctx: ExecutionCont
         env,
         ctx,
       );
-      const res = shouldBypassPublicSharedCaching(normalizedRequest, env)
+      const res = shouldBypassPublicSharedCaching(normalizedRequest)
         ? applyPrivateNoStore(routeRes, normalizedRequest)
         : routeRes;
       return applyCorsHeaders(res, origin, 'GET, OPTIONS');
     }
     if (normalizedRequest.method === 'GET' && isPublicUiPath(url)) {
       const { publicUiRoutes } = await import('./routes/public-ui');
-      const routeRes = await publicUiRoutes.fetch(rewritePublicRequest(normalizedRequest), env, ctx);
-      const res = shouldBypassPublicSharedCaching(normalizedRequest, env)
+      const routeRes = await publicUiRoutes.fetch(
+        rewritePublicRequest(normalizedRequest),
+        env,
+        ctx,
+      );
+      const res = shouldBypassPublicSharedCaching(normalizedRequest)
         ? applyPrivateNoStore(routeRes, normalizedRequest)
         : routeRes;
       return applyCorsHeaders(res, origin, 'GET, OPTIONS');
