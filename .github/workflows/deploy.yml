@@ -516,12 +516,20 @@ jobs:
           fi
 
           deploy_url="$(echo "$deploy_out" | grep -oE 'https://[^ ]+[.]pages[.]dev' | head -n1 || true)"
-          production_url="https://${PAGES_PROJECT}.pages.dev"
+          stable_url=""
+          if [[ "$deploy_url" =~ ^https://[^.]+[.]([^.]+[.]pages[.]dev)$ ]]; then
+            stable_url="https://${BASH_REMATCH[1]}"
+          elif [[ -n "$deploy_url" ]]; then
+            stable_url="$deploy_url"
+          else
+            stable_url="https://${PAGES_PROJECT}.pages.dev"
+          fi
 
           if [[ -n "$deploy_url" ]]; then
             echo "pages_deploy_url=$deploy_url" >> "$GITHUB_OUTPUT"
           fi
-          echo "pages_production_url=$production_url" >> "$GITHUB_OUTPUT"
+          echo "pages_stable_url=$stable_url" >> "$GITHUB_OUTPUT"
+          echo "pages_smoke_url=$stable_url" >> "$GITHUB_OUTPUT"
 
       - name: Post-deploy smoke checks
         shell: bash
@@ -646,4 +654,4 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
         env:
           WORKER_URL: ${{ steps.deploy_worker.outputs.worker_url }}
-          PAGES_PRODUCTION_URL: ${{ steps.deploy_pages.outputs.pages_production_url }}
+          PAGES_PRODUCTION_URL: ${{ steps.deploy_pages.outputs.pages_smoke_url }}
