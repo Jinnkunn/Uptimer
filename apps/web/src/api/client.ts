@@ -373,6 +373,48 @@ export async function fetchPublicMonitorOutages(
 
 export { ApiError };
 
+function getDownloadFilename(header: string | null, fallback: string): string {
+  if (!header) return fallback;
+
+  const utf8Match = /filename\*=UTF-8''([^;]+)/i.exec(header);
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1]);
+    } catch {
+      return fallback;
+    }
+  }
+
+  const quotedMatch = /filename="([^"]+)"/i.exec(header);
+  if (quotedMatch?.[1]) return quotedMatch[1];
+
+  const plainMatch = /filename=([^;]+)/i.exec(header);
+  return plainMatch?.[1]?.trim() || fallback;
+}
+
+export async function downloadAdminCsv(path: string, fallbackFilename: string): Promise<void> {
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+  const res = await fetch(`${API_BASE}${normalizedPath}`, {
+    headers: getAuthHeaders(),
+  });
+
+  if (!res.ok) {
+    await handleResponse<never>(res);
+    throw new ApiError('UNKNOWN', 'CSV export failed.', res.status);
+  }
+
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = getDownloadFilename(res.headers.get('Content-Disposition'), fallbackFilename);
+  link.style.display = 'none';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
 // Admin auth
 export async function verifyAdminToken(token: string): Promise<void> {
   const res = await fetch(`${API_BASE}/admin/auth/verify`, {

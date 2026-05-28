@@ -7,6 +7,8 @@ import { useI18n } from '../app/I18nContext';
 import { useApplyServerLocaleSetting } from '../app/useApplyServerLocaleSetting';
 import { ADMIN_PATH } from '../app/adminPaths';
 import {
+  ApiError,
+  downloadAdminCsv,
   fetchAdminAnalyticsOverview,
   fetchAdminMonitorAnalytics,
   fetchAdminMonitorOutages,
@@ -23,6 +25,35 @@ import { formatPct } from '../utils/uptime';
 
 const overviewRanges: AnalyticsOverviewRange[] = ['24h', '7d'];
 const monitorRanges: AnalyticsRange[] = ['24h', '7d', '30d', '90d'];
+
+const DOWNLOAD_ICON_PATH =
+  'M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M7.5 10.5L12 15m0 0l4.5-4.5M12 15V3';
+
+function DownloadIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-4 w-4"
+      fill="none"
+      focusable="false"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={DOWNLOAD_ICON_PATH} />
+    </svg>
+  );
+}
+
+function formatError(err: unknown): string | undefined {
+  if (!err) return undefined;
+  if (err instanceof ApiError) return `${err.code}: ${err.message}`;
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
+function getCheckExportRange(range: AnalyticsRange): '24h' | '7d' | null {
+  return range === '24h' || range === '7d' ? range : null;
+}
 
 function formatSec(v: number): string {
   if (!Number.isFinite(v)) return '-';
@@ -101,6 +132,8 @@ export function AdminAnalytics() {
   const [overviewRange, setOverviewRange] = useState<AnalyticsOverviewRange>('24h');
   const [monitorRange, setMonitorRange] = useState<AnalyticsRange>('24h');
   const [selectedMonitorId, setSelectedMonitorId] = useState<number | null>(null);
+  const [exportingCsv, setExportingCsv] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   const settingsQuery = useQuery({
     queryKey: ['admin-settings'],
@@ -155,6 +188,19 @@ export function AdminAnalytics() {
     () => monitors.find((monitor) => monitor.id === selectedMonitorId) ?? null,
     [monitors, selectedMonitorId],
   );
+  const checkExportRange = getCheckExportRange(monitorRange);
+
+  async function handleCsvExport(key: string, path: string, fallbackFilename: string) {
+    setExportingCsv(key);
+    setExportError(null);
+    try {
+      await downloadAdminCsv(path, fallbackFilename);
+    } catch (err) {
+      setExportError(formatError(err) ?? t('admin_analytics.export_failed'));
+    } finally {
+      setExportingCsv((current) => (current === key ? null : current));
+    }
+  }
 
   const monitorAnalyticsQuery = useQuery({
     queryKey: ['admin-monitor-analytics', selectedMonitorId, monitorRange],
@@ -253,6 +299,12 @@ export function AdminAnalytics() {
       </header>
 
       <main className="mx-auto max-w-[92rem] space-y-6 px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
+        {exportError && (
+          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-400/30 dark:bg-red-500/10 dark:text-red-300">
+            {exportError}
+          </div>
+        )}
+
         <Card className="p-5 sm:p-6">
           <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -263,11 +315,33 @@ export function AdminAnalytics() {
                 {t('admin_analytics.overview_desc')}
               </p>
             </div>
-            <RangeTabs
-              values={overviewRanges}
-              current={overviewRange}
-              onChange={setOverviewRange}
-            />
+            <div className="flex flex-wrap items-center gap-2">
+              <RangeTabs
+                values={overviewRanges}
+                current={overviewRange}
+                onChange={setOverviewRange}
+              />
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() =>
+                  handleCsvExport(
+                    'incidents',
+                    `/admin/exports/incidents.csv?range=${overviewRange}`,
+                    `incidents-${overviewRange}.csv`,
+                  )
+                }
+                disabled={exportingCsv !== null}
+                title={t('admin_analytics.export_incidents_csv')}
+              >
+                <DownloadIcon />
+                <span>
+                  {exportingCsv === 'incidents'
+                    ? t('admin_analytics.exporting_csv')
+                    : t('admin_analytics.export_incidents_csv')}
+                </span>
+              </Button>
+            </div>
           </div>
 
           {overviewQuery.isLoading ? (
@@ -325,7 +399,59 @@ export function AdminAnalytics() {
                   {t('admin_analytics.monitor_desc')}
                 </p>
               </div>
-              <RangeTabs values={monitorRanges} current={monitorRange} onChange={setMonitorRange} />
+              <div className="flex flex-wrap items-center gap-2">
+                <RangeTabs
+                  values={monitorRanges}
+                  current={monitorRange}
+                  onChange={setMonitorRange}
+                />
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    if (!selectedMonitor || !checkExportRange) return;
+                    handleCsvExport(
+                      `checks-${selectedMonitor.id}`,
+                      `/admin/exports/monitors/${selectedMonitor.id}/check-results.csv?range=${checkExportRange}`,
+                      `check-results-monitor-${selectedMonitor.id}-${checkExportRange}.csv`,
+                    );
+                  }}
+                  disabled={!selectedMonitor || !checkExportRange || exportingCsv !== null}
+                  title={
+                    checkExportRange
+                      ? t('admin_analytics.export_checks_csv')
+                      : t('admin_analytics.export_checks_unavailable')
+                  }
+                >
+                  <DownloadIcon />
+                  <span>
+                    {exportingCsv?.startsWith('checks-')
+                      ? t('admin_analytics.exporting_csv')
+                      : t('admin_analytics.export_checks_csv')}
+                  </span>
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    if (!selectedMonitor) return;
+                    handleCsvExport(
+                      `outages-${selectedMonitor.id}`,
+                      `/admin/exports/monitors/${selectedMonitor.id}/outages.csv?range=${monitorRange}`,
+                      `outages-monitor-${selectedMonitor.id}-${monitorRange}.csv`,
+                    );
+                  }}
+                  disabled={!selectedMonitor || exportingCsv !== null}
+                  title={t('admin_analytics.export_outages_csv')}
+                >
+                  <DownloadIcon />
+                  <span>
+                    {exportingCsv?.startsWith('outages-')
+                      ? t('admin_analytics.exporting_csv')
+                      : t('admin_analytics.export_outages_csv')}
+                  </span>
+                </Button>
+              </div>
             </div>
 
             <label className="ui-label mb-0 text-sm font-medium text-slate-700 dark:text-slate-300">

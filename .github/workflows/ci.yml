@@ -12,6 +12,11 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Exercise GitHub JavaScript actions on Node 24 before GitHub makes it the
+  # default runner runtime. This keeps deprecation-driven CI breaks visible.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   lint-and-typecheck:
     runs-on: ubuntu-latest

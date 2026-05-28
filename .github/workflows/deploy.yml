@@ -12,6 +12,11 @@ concurrency:
   group: deploy-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Exercise GitHub JavaScript actions on Node 24 before GitHub makes it the
+  # default runner runtime. This keeps deprecation-driven deploy breaks visible.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -489,12 +494,156 @@ jobs:
           printf %s "$api_origin" | pnpm -C apps/worker exec wrangler --cwd ../.. pages secret put UPTIMER_API_ORIGIN --project-name "$PAGES_PROJECT"
 
       - name: Deploy Pages (idempotent)
+        id: deploy_pages
         shell: bash
         run: |
           set -euo pipefail
-          pnpm -C apps/worker exec wrangler --cwd ../.. pages deploy apps/web/dist \
-            --project-name "$PAGES_PROJECT" \
-            --branch "$DEFAULT_BRANCH" \
-            --commit-hash "$GITHUB_SHA" \
-            --commit-message "$GITHUB_SHA" \
-            --commit-dirty=true
+          set +e
+          deploy_out="$(
+            pnpm -C apps/worker exec wrangler --cwd ../.. pages deploy apps/web/dist \
+              --project-name "$PAGES_PROJECT" \
+              --branch "$DEFAULT_BRANCH" \
+              --commit-hash "$GITHUB_SHA" \
+              --commit-message "$GITHUB_SHA" \
+              --commit-dirty=true
+            2>&1
+          )"
+          deploy_code="$?"
+          set -e
+          echo "$deploy_out"
+          if [[ "$deploy_code" -ne 0 ]]; then
+            exit "$deploy_code"
+          fi
+
+          deploy_url="$(echo "$deploy_out" | grep -oE 'https://[^ ]+[.]pages[.]dev' | head -n1 || true)"
+          production_url="https://${PAGES_PROJECT}.pages.dev"
+
+          if [[ -n "$deploy_url" ]]; then
+            echo "pages_deploy_url=$deploy_url" >> "$GITHUB_OUTPUT"
+          fi
+          echo "pages_production_url=$production_url" >> "$GITHUB_OUTPUT"
+
+      - name: Post-deploy smoke checks
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          worker_url="${WORKER_URL:-}"
+          pages_url="${PAGES_PRODUCTION_URL:-}"
+
+          curl_retry() {
+            local url="$1"
+            local output="$2"
+            local attempt
+            for attempt in 1 2 3 4 5; do
+              if curl -fsS "$url" -o "$output"; then
+                return 0
+              fi
+              sleep 3
+            done
+            curl -fsS "$url" -o "$output"
+          }
+
+          if [[ -z "$worker_url" ]]; then
+            echo "::warning::Skipping Worker smoke checks: no Worker URL was detected."
+          else
+            status_json="$(mktemp)"
+            curl_retry "$worker_url/api/v1/public/status" "$status_json"
+            jq -e '
+              (.generated_at | type == "number")
+              and (.monitors | type == "array")
+              and (.summary | type == "object")
+            ' "$status_json" >/dev/null
+
+            admin_body="$(mktemp)"
+            admin_code="$(
+              curl -sS "$worker_url/api/v1/admin/auth/verify" \
+                -o "$admin_body" \
+                -w '%{http_code}'
+            )"
+            if [[ "$admin_code" != "401" ]]; then
+              echo "Expected unauthenticated admin verify to return 401, got $admin_code"
+              cat "$admin_body"
+              exit 1
+            fi
+            jq -e '.error.code == "UNAUTHORIZED"' "$admin_body" >/dev/null
+          fi
+
+          if [[ -z "$pages_url" ]]; then
+            echo "::warning::Skipping Pages smoke checks: no Pages URL was detected."
+          else
+            index_html="$(mktemp)"
+            curl_retry "$pages_url/" "$index_html"
+            curl_retry "$pages_url/admin" /dev/null
+            curl_retry "$pages_url/admin/callback" /dev/null
+
+            main_asset="$(
+              grep -oE 'assets/index-[A-Za-z0-9_-]+[.]js' "$index_html" | head -n1 || true
+            )"
+            if [[ -z "$main_asset" ]]; then
+              echo "Failed to find the built index asset in the Pages HTML."
+              exit 1
+            fi
+
+            main_js="$(mktemp)"
+            curl_retry "$pages_url/$main_asset" "$main_js"
+
+            if [[ -n "${VITE_AUTH_ISSUER:-}" || -n "${VITE_AUTH_CLIENT_ID:-}" ]]; then
+              oidc_asset="$(
+                grep -oE 'assets/oidc-[A-Za-z0-9_-]+[.]js' "$main_js" | head -n1 || true
+              )"
+              if [[ -z "$oidc_asset" ]]; then
+                echo "OIDC config is set, but the OIDC bundle was not referenced by the app bundle."
+                exit 1
+              fi
+
+              oidc_js="$(mktemp)"
+              curl_retry "$pages_url/$oidc_asset" "$oidc_js"
+
+              if [[ -n "${VITE_AUTH_ISSUER:-}" ]]; then
+                grep -F "$VITE_AUTH_ISSUER" "$oidc_js" >/dev/null
+              fi
+              if [[ -n "${VITE_AUTH_CLIENT_ID:-}" ]]; then
+                grep -F "$VITE_AUTH_CLIENT_ID" "$oidc_js" >/dev/null
+              fi
+
+              if [[ -n "${VITE_AUTH_ISSUER:-}" ]]; then
+                auth_origin="${VITE_AUTH_ISSUER%/}"
+                cors_headers="$(mktemp)"
+                cors_code="$(
+                  curl -sS -X OPTIONS "$auth_origin/oauth2/token" \
+                    -H "Origin: $pages_url" \
+                    -H 'Access-Control-Request-Method: POST' \
+                    -H 'Access-Control-Request-Headers: content-type' \
+                    -D "$cors_headers" \
+                    -o /dev/null \
+                    -w '%{http_code}'
+                )"
+                if [[ "$cors_code" != "200" ]]; then
+                  echo "Expected auth token CORS preflight to return 200, got $cors_code"
+                  exit 1
+                fi
+                allowed_origin="$(
+                  tr -d '\r' < "$cors_headers" \
+                    | awk 'BEGIN { IGNORECASE = 1 } /^access-control-allow-origin:/ { sub(/^[^:]+:[[:space:]]*/, ""); print; exit }'
+                )"
+                if [[ "$allowed_origin" != "$pages_url" ]]; then
+                  echo "Auth token CORS preflight did not allow $pages_url"
+                  cat "$cors_headers"
+                  exit 1
+                fi
+              fi
+            fi
+          fi
+
+          {
+            echo "### Post-deploy Smoke Checks"
+            echo ""
+            echo "- Worker public status: ${worker_url:-skipped}"
+            echo "- Worker admin unauthenticated guard: ${worker_url:-skipped}"
+            echo "- Pages production URL: ${pages_url:-skipped}"
+            echo "- OIDC build config and auth CORS: $([[ -n "${VITE_AUTH_ISSUER:-}" || -n "${VITE_AUTH_CLIENT_ID:-}" ]] && echo checked || echo skipped)"
+          } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          WORKER_URL: ${{ steps.deploy_worker.outputs.worker_url }}
+          PAGES_PRODUCTION_URL: ${{ steps.deploy_pages.outputs.pages_production_url }}
