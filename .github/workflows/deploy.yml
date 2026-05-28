@@ -26,6 +26,24 @@ jobs:
       # - Set repo secret `VITE_ADMIN_PATH` to customize the admin URL path (e.g. /37dh3hi2)
       # - If unset/empty, the web app falls back to /admin
       VITE_ADMIN_PATH: ${{ secrets.VITE_ADMIN_PATH || vars.VITE_ADMIN_PATH || vars.UPTIMER_ADMIN_PATH }}
+      VITE_AUTH_ISSUER: ${{ secrets.VITE_AUTH_ISSUER || vars.VITE_AUTH_ISSUER }}
+      VITE_AUTH_CLIENT_ID: ${{ secrets.VITE_AUTH_CLIENT_ID || vars.VITE_AUTH_CLIENT_ID }}
+      VITE_AUTH_RESOURCE: ${{ secrets.VITE_AUTH_RESOURCE || vars.VITE_AUTH_RESOURCE }}
+      VITE_AUTH_SCOPE: ${{ secrets.VITE_AUTH_SCOPE || vars.VITE_AUTH_SCOPE }}
+      VITE_AUTH_REDIRECT_PATH: ${{ secrets.VITE_AUTH_REDIRECT_PATH || vars.VITE_AUTH_REDIRECT_PATH }}
+
+      # Worker-side optional OIDC admin auth config.
+      UPTIMER_AUTH_ISSUER: ${{ secrets.UPTIMER_AUTH_ISSUER || vars.UPTIMER_AUTH_ISSUER }}
+      UPTIMER_AUTH_JWKS_URL: ${{ secrets.UPTIMER_AUTH_JWKS_URL || vars.UPTIMER_AUTH_JWKS_URL }}
+      UPTIMER_AUTH_AUDIENCE: ${{ secrets.UPTIMER_AUTH_AUDIENCE || vars.UPTIMER_AUTH_AUDIENCE }}
+      UPTIMER_AUTH_AUDIENCES: ${{ secrets.UPTIMER_AUTH_AUDIENCES || vars.UPTIMER_AUTH_AUDIENCES }}
+      UPTIMER_AUTH_REQUIRED_SCOPE: ${{ secrets.UPTIMER_AUTH_REQUIRED_SCOPE || vars.UPTIMER_AUTH_REQUIRED_SCOPE }}
+      UPTIMER_AUTH_REQUIRED_SCOPES: ${{ secrets.UPTIMER_AUTH_REQUIRED_SCOPES || vars.UPTIMER_AUTH_REQUIRED_SCOPES }}
+      UPTIMER_AUTH_ALLOWED_CLIENT_IDS: ${{ secrets.UPTIMER_AUTH_ALLOWED_CLIENT_IDS || vars.UPTIMER_AUTH_ALLOWED_CLIENT_IDS }}
+      UPTIMER_AUTH_ALLOWED_SUBS: ${{ secrets.UPTIMER_AUTH_ALLOWED_SUBS || vars.UPTIMER_AUTH_ALLOWED_SUBS }}
+      UPTIMER_AUTH_ALLOWED_ORGS: ${{ secrets.UPTIMER_AUTH_ALLOWED_ORGS || vars.UPTIMER_AUTH_ALLOWED_ORGS }}
+      UPTIMER_AUTH_ALLOW_ANY_SUBJECT: ${{ secrets.UPTIMER_AUTH_ALLOW_ANY_SUBJECT || vars.UPTIMER_AUTH_ALLOW_ANY_SUBJECT }}
+      UPTIMER_AUTH_CLOCK_SKEW_SECONDS: ${{ secrets.UPTIMER_AUTH_CLOCK_SKEW_SECONDS || vars.UPTIMER_AUTH_CLOCK_SKEW_SECONDS }}
     steps:
       - uses: actions/checkout@v4
 
@@ -328,6 +346,33 @@ jobs:
         run: |
           set -euo pipefail
           printf '%s' "$UPTIMER_ADMIN_TOKEN" | pnpm exec wrangler secret put ADMIN_TOKEN --name "$WORKER_NAME" --config "$WRANGLER_CI_CONFIG"
+
+      - name: Upsert Worker auth config (optional)
+        shell: bash
+        working-directory: apps/worker
+        run: |
+          set -euo pipefail
+
+          put_secret_if_set() {
+            local name="$1"
+            local value="${!name:-}"
+            if [[ -z "$value" ]]; then
+              return 0
+            fi
+            printf '%s' "$value" | pnpm exec wrangler secret put "$name" --name "$WORKER_NAME" --config "$WRANGLER_CI_CONFIG"
+          }
+
+          put_secret_if_set UPTIMER_AUTH_ISSUER
+          put_secret_if_set UPTIMER_AUTH_JWKS_URL
+          put_secret_if_set UPTIMER_AUTH_AUDIENCE
+          put_secret_if_set UPTIMER_AUTH_AUDIENCES
+          put_secret_if_set UPTIMER_AUTH_REQUIRED_SCOPE
+          put_secret_if_set UPTIMER_AUTH_REQUIRED_SCOPES
+          put_secret_if_set UPTIMER_AUTH_ALLOWED_CLIENT_IDS
+          put_secret_if_set UPTIMER_AUTH_ALLOWED_SUBS
+          put_secret_if_set UPTIMER_AUTH_ALLOWED_ORGS
+          put_secret_if_set UPTIMER_AUTH_ALLOW_ANY_SUBJECT
+          put_secret_if_set UPTIMER_AUTH_CLOCK_SKEW_SECONDS
 
       - name: Resolve API base + origin (for Vite build + Pages preload)
         shell: bash
