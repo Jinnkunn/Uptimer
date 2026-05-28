@@ -21,7 +21,7 @@ import {
 
 import type { Env } from '../env';
 import { requireAdmin } from '../middleware/auth';
-import { AppError } from '../middleware/errors';
+import { AppError, handleError, handleNotFound } from '../middleware/errors';
 import { requireAdminRateLimit } from '../middleware/rate-limit';
 import { computePublicHomepagePayload } from '../public/homepage';
 import {
@@ -70,6 +70,9 @@ import {
 } from '../schemas/notification-channels';
 
 export const adminRoutes = new Hono<{ Bindings: Env }>();
+
+adminRoutes.onError(handleError);
+adminRoutes.notFound(handleNotFound);
 
 adminRoutes.use('*', requireAdminRateLimit);
 

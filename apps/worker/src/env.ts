@@ -47,4 +47,18 @@ export interface Env {
   // Keep optional so older deployments don't break.
   ADMIN_RATE_LIMIT_MAX?: string;
   ADMIN_RATE_LIMIT_WINDOW_SEC?: string;
+
+  // Optional OIDC admin auth. When unset, the Worker keeps the legacy
+  // ADMIN_TOKEN-only behavior.
+  UPTIMER_AUTH_ISSUER?: string;
+  UPTIMER_AUTH_JWKS_URL?: string;
+  UPTIMER_AUTH_AUDIENCE?: string;
+  UPTIMER_AUTH_AUDIENCES?: string;
+  UPTIMER_AUTH_REQUIRED_SCOPE?: string;
+  UPTIMER_AUTH_REQUIRED_SCOPES?: string;
+  UPTIMER_AUTH_ALLOWED_CLIENT_IDS?: string;
+  UPTIMER_AUTH_ALLOWED_SUBS?: string;
+  UPTIMER_AUTH_ALLOWED_ORGS?: string;
+  UPTIMER_AUTH_ALLOW_ANY_SUBJECT?: string;
+  UPTIMER_AUTH_CLOCK_SKEW_SECONDS?: string;
 }

@@ -7,18 +7,30 @@ import { useApplyServerLocaleSetting } from '../app/useApplyServerLocaleSetting'
 import { fetchStatus } from '../api/client';
 import { useAuth } from '../app/AuthContext';
 import { ADMIN_PATH } from '../app/adminPaths';
+import { isOidcLoginConfigured, startOidcLogin } from '../auth/oidc';
 import { Button, Card, INPUT_CLASS } from '../components/ui';
+
+type FromLocation = {
+  pathname: string;
+  search?: string;
+  hash?: string;
+};
 
 export function AdminLogin() {
   const { t } = useI18n();
   const [token, setToken] = useState('');
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSsoSubmitting, setIsSsoSubmitting] = useState(false);
 
   const { login } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const from = (location.state as { from?: { pathname: string } })?.from?.pathname || ADMIN_PATH;
+  const fromLocation = (location.state as { from?: FromLocation })?.from;
+  const from = fromLocation
+    ? `${fromLocation.pathname}${fromLocation.search ?? ''}${fromLocation.hash ?? ''}`
+    : ADMIN_PATH;
+  const oidcConfigured = isOidcLoginConfigured();
 
   const statusQuery = useQuery({
     queryKey: ['status'],
@@ -54,6 +66,18 @@ export function AdminLogin() {
     }
   };
 
+  const handleOidcLogin = async () => {
+    if (isSsoSubmitting) return;
+    setIsSsoSubmitting(true);
+    setError('');
+    try {
+      await startOidcLogin(from);
+    } catch {
+      setError(t('admin_login.callback_error'));
+      setIsSsoSubmitting(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-900 flex items-center justify-center p-4 sm:p-6">
       <Card className="w-full max-w-md p-7 sm:p-8">
@@ -75,6 +99,17 @@ export function AdminLogin() {
             {t('admin_login.subtitle')}
           </p>
         </div>
+
+        {oidcConfigured && (
+          <Button
+            type="button"
+            className="mb-5 w-full"
+            disabled={isSsoSubmitting}
+            onClick={handleOidcLogin}
+          >
+            {isSsoSubmitting ? t('admin_login.submitting') : t('admin_login.sso_submit')}
+          </Button>
+        )}
 
         <form onSubmit={handleSubmit} className="space-y-5">
           <div>

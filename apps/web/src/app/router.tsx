@@ -2,7 +2,12 @@ import { Suspense, lazy } from 'react';
 import { createBrowserRouter } from 'react-router-dom';
 
 import { StatusPage } from '../pages/StatusPage';
-import { ADMIN_ANALYTICS_PATH, ADMIN_LOGIN_PATH, ADMIN_PATH } from './adminPaths';
+import {
+  ADMIN_ANALYTICS_PATH,
+  ADMIN_CALLBACK_PATH,
+  ADMIN_LOGIN_PATH,
+  ADMIN_PATH,
+} from './adminPaths';
 import { ProtectedRoute } from './ProtectedRoute';
 
 const AdminDashboard = lazy(async () => {
@@ -28,6 +33,11 @@ const MaintenanceHistoryPage = lazy(async () => {
 const AdminLogin = lazy(async () => {
   const mod = await import('../pages/AdminLogin');
   return { default: mod.AdminLogin };
+});
+
+const AdminCallback = lazy(async () => {
+  const mod = await import('../pages/AdminCallback');
+  return { default: mod.AdminCallback };
 });
 
 function PageFallback() {
@@ -77,6 +87,14 @@ export const router = createBrowserRouter([
     element: (
       <Suspense fallback={<PageFallback />}>
         <AdminLogin />
+      </Suspense>
+    ),
+  },
+  {
+    path: ADMIN_CALLBACK_PATH,
+    element: (
+      <Suspense fallback={<PageFallback />}>
+        <AdminCallback />
       </Suspense>
     ),
   },

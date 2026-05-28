@@ -1,13 +1,9 @@
 import { Hono } from 'hono';
 
 import type { Env } from '../env';
-import { hasValidAdminTokenRequest } from '../middleware/auth';
+import { hasValidAdminRequest } from '../middleware/auth';
 import { AppError, handleError, handleNotFound } from '../middleware/errors';
-import {
-  Trace,
-  applyTraceToResponse,
-  resolveTraceOptions,
-} from '../observability/trace';
+import { Trace, applyTraceToResponse, resolveTraceOptions } from '../observability/trace';
 
 function appendVaryHeader(res: Response, value: string): void {
   const next = value.trim();
@@ -77,9 +73,8 @@ publicHotRoutes.onError(handleError);
 publicHotRoutes.notFound(handleNotFound);
 
 publicHotRoutes.get('/homepage', async (c) => {
-  const { applyHomepageCacheHeaders, readHomepageSnapshotJson } = await import(
-    '../snapshots/public-homepage-read'
-  );
+  const { applyHomepageCacheHeaders, readHomepageSnapshotJson } =
+    await import('../snapshots/public-homepage-read');
   const now = Math.floor(Date.now() / 1000);
   const trace = new Trace(
     resolveTraceOptions({
@@ -160,7 +155,7 @@ publicHotRoutes.get('/status', async (c) => {
   const { applyStatusCacheHeaders, readStatusSnapshotJson, readStaleStatusSnapshotJson } =
     await import('../snapshots/public-status-read');
   const now = Math.floor(Date.now() / 1000);
-  const includeHiddenMonitors = hasValidAdminTokenRequest(c);
+  const includeHiddenMonitors = await hasValidAdminRequest(c);
   const hasAuthorizationHeader = hasAuthorizationHeaderValue(c.req.header('Authorization'));
   const shouldBypassSharedCaching = hasAuthorizationHeader && !includeHiddenMonitors;
   const trace = new Trace(

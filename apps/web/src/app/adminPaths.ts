@@ -29,4 +29,5 @@ function normalizeAdminPath(raw: unknown): string {
 // Example (Cloudflare Pages env var): VITE_ADMIN_PATH=/37dh3hi2
 export const ADMIN_PATH = normalizeAdminPath(import.meta.env.VITE_ADMIN_PATH);
 export const ADMIN_LOGIN_PATH = `${ADMIN_PATH}/login`;
+export const ADMIN_CALLBACK_PATH = `${ADMIN_PATH}/callback`;
 export const ADMIN_ANALYTICS_PATH = `${ADMIN_PATH}/analytics`;

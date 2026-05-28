@@ -4,11 +4,8 @@ import { z } from 'zod';
 import { getDb, monitors } from '@uptimer/db';
 
 import type { Env } from '../env';
-import { hasValidAdminTokenRequest } from '../middleware/auth';
-import {
-  homepageFromStatusPayload,
-  readHomepageHistoryPreviews,
-} from '../public/homepage';
+import { hasValidAdminRequest } from '../middleware/auth';
+import { homepageFromStatusPayload, readHomepageHistoryPreviews } from '../public/homepage';
 import { computePublicStatusPayload } from '../public/status';
 import {
   buildNumberedPlaceholders,
@@ -61,11 +58,11 @@ function safeToSnapshotPayload(data: unknown) {
   }
 }
 
-function isAuthorizedStatusAdminRequest(c: {
-  env: Pick<Env, 'ADMIN_TOKEN'>;
+async function isAuthorizedStatusAdminRequest(c: {
+  env: Env;
   req: { header(name: string): string | undefined };
-}): boolean {
-  return hasValidAdminTokenRequest(c);
+}): Promise<boolean> {
+  return hasValidAdminRequest(c);
 }
 
 function appendAuthorizationVary(res: Response): Response {
@@ -866,9 +863,7 @@ async function listPublicMaintenanceWindowsPage(opts: {
     .slice(0, opts.limit)
     .map(({ row, monitorIds }) => maintenanceWindowRowToApi(row, monitorIds));
   const next_cursor =
-    collected.length > opts.limit
-      ? (collected[opts.limit - 1]?.row.id ?? null)
-      : null;
+    collected.length > opts.limit ? (collected[opts.limit - 1]?.row.id ?? null) : null;
 
   return {
     maintenance_windows: maintenanceWindows,
@@ -878,7 +873,7 @@ async function listPublicMaintenanceWindowsPage(opts: {
 
 publicRoutes.get('/status', async (c) => {
   const now = Math.floor(Date.now() / 1000);
-  const includeHiddenMonitors = isAuthorizedStatusAdminRequest(c);
+  const includeHiddenMonitors = await isAuthorizedStatusAdminRequest(c);
   const trace = new Trace(
     resolveTraceOptions({
       header: (name) => c.req.header(name),
@@ -891,7 +886,7 @@ publicRoutes.get('/status', async (c) => {
   if (includeHiddenMonitors) {
     const payload = await trace.timeAsync('status_compute', () =>
       computePublicStatusPayload(c.env.DB, now, {
-      includeHiddenMonitors: true,
+        includeHiddenMonitors: true,
       }),
     );
     const res = applyPrivateNoStore(c.json(payload));
@@ -1122,7 +1117,7 @@ publicRoutes.get('/homepage-artifact', async (c) => {
 });
 
 publicRoutes.get('/incidents', async (c) => {
-  const includeHiddenMonitors = isAuthorizedStatusAdminRequest(c);
+  const includeHiddenMonitors = await isAuthorizedStatusAdminRequest(c);
   const limit = z.coerce
     .number()
     .int()
@@ -1182,9 +1177,8 @@ publicRoutes.get('/incidents', async (c) => {
     const initialCursor =
       cursor === undefined
         ? null
-        : await c.env.DB
-            .prepare(
-              `
+        : await c.env.DB.prepare(
+            `
                 SELECT id, resolved_at
                 FROM incidents
                 WHERE id = ?1
@@ -1192,7 +1186,7 @@ publicRoutes.get('/incidents', async (c) => {
                   AND resolved_at IS NOT NULL
                   AND ${incidentVisibilitySql}
               `,
-            )
+          )
             .bind(cursor)
             .first<ResolvedIncidentCursorRow>();
 
@@ -1282,7 +1276,7 @@ publicRoutes.get('/incidents', async (c) => {
 });
 
 publicRoutes.get('/maintenance-windows', async (c) => {
-  const includeHiddenMonitors = isAuthorizedStatusAdminRequest(c);
+  const includeHiddenMonitors = await isAuthorizedStatusAdminRequest(c);
   const limit = z.coerce
     .number()
     .int()
@@ -1310,7 +1304,7 @@ publicRoutes.get('/maintenance-windows', async (c) => {
 });
 
 publicRoutes.get('/monitors/:id/day-context', async (c) => {
-  const includeHiddenMonitors = isAuthorizedStatusAdminRequest(c);
+  const includeHiddenMonitors = await isAuthorizedStatusAdminRequest(c);
   const id = z.coerce.number().int().positive().parse(c.req.param('id'));
   const dayStartAt = z.coerce.number().int().nonnegative().parse(c.req.query('day_start_at'));
   const dayEndAt = dayStartAt + 86400;
@@ -1399,7 +1393,10 @@ publicRoutes.get('/monitors/:id/day-context', async (c) => {
   const visibleMonitorIds = includeHiddenMonitors
     ? new Set<number>()
     : await (async () => {
-        const scopedMonitorIds = [...monitorIdsByWindowId.values(), ...monitorIdsByIncidentId.values()].flat();
+        const scopedMonitorIds = [
+          ...monitorIdsByWindowId.values(),
+          ...monitorIdsByIncidentId.values(),
+        ].flat();
         return scopedMonitorIds.length === 0
           ? new Set<number>()
           : listStatusPageVisibleMonitorIds(c.env.DB, scopedMonitorIds);
@@ -1443,7 +1440,7 @@ publicRoutes.get('/monitors/:id/day-context', async (c) => {
 });
 
 publicRoutes.get('/monitors/:id/latency', async (c) => {
-  const includeHiddenMonitors = isAuthorizedStatusAdminRequest(c);
+  const includeHiddenMonitors = await isAuthorizedStatusAdminRequest(c);
   const id = z.coerce.number().int().positive().parse(c.req.param('id'));
   const range = latencyRangeSchema.optional().default('24h').parse(c.req.query('range'));
 
@@ -1505,7 +1502,7 @@ function resolveUptimeRangeStart(
 }
 
 publicRoutes.get('/monitors/:id/uptime', async (c) => {
-  const includeHiddenMonitors = isAuthorizedStatusAdminRequest(c);
+  const includeHiddenMonitors = await isAuthorizedStatusAdminRequest(c);
   const id = z.coerce.number().int().positive().parse(c.req.param('id'));
   const range = uptimeRangeSchema.optional().default('24h').parse(c.req.query('range'));
 
@@ -1681,7 +1678,7 @@ async function computePartialUptimeTotals(
 }
 
 publicRoutes.get('/analytics/uptime', async (c) => {
-  const includeHiddenMonitors = isAuthorizedStatusAdminRequest(c);
+  const includeHiddenMonitors = await isAuthorizedStatusAdminRequest(c);
   const range = uptimeOverviewRangeSchema.optional().default('30d').parse(c.req.query('range'));
 
   const now = Math.floor(Date.now() / 1000);
@@ -1824,7 +1821,7 @@ publicRoutes.get('/analytics/uptime', async (c) => {
 });
 
 publicRoutes.get('/monitors/:id/outages', async (c) => {
-  const includeHiddenMonitors = isAuthorizedStatusAdminRequest(c);
+  const includeHiddenMonitors = await isAuthorizedStatusAdminRequest(c);
   const id = z.coerce.number().int().positive().parse(c.req.param('id'));
   const range = z.enum(['30d']).optional().default('30d').parse(c.req.query('range'));
   const limit = z.coerce
